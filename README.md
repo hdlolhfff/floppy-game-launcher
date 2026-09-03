@@ -60,7 +60,7 @@ Do not include `.exe` in `process`. You can find the process name in Task Manage
 
 ## How It Works
 
-The watcher checks `A:\` once every 6.5 seconds. It parses `autorun.txt` and launches the configured executable once for that disk session. A disk must remain unavailable for three seconds before the watcher treats it as ejected; this avoids duplicate launches caused by temporary read failures.
+The watcher checks `A:\` once every four seconds. It parses `autorun.txt` and launches the configured executable once for that disk session. A disk must remain unavailable for three seconds before the watcher treats it as ejected; this avoids duplicate launches caused by temporary read failures.
 
 On ejection, the watcher sends the game a standard Windows close request (`WM_CLOSE`). It does not force-kill the process.
 

@@ -73,5 +73,5 @@ while ($true) {
         $notReadySince = $null
     }
 
-    Start-Sleep -Milliseconds 6500
+    Start-Sleep -Seconds 4
 }
