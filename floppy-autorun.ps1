@@ -35,7 +35,7 @@ public static class FloppyWindowCloser
 
     public static bool IsMediaReady(string drive)
     {
-        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero))
+        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero))
         {
             if (device.IsInvalid)
             {
