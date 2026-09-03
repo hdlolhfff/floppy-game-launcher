@@ -76,6 +76,8 @@ The watcher records timestamped activity in:
 
 The log includes watcher startup, volume arrival/removal events, disk detection, launch results, temporary media failures, confirmed ejection, and game close requests.
 
+Malformed configurations without a `path` value are logged and checked again after four seconds, allowing the file to be corrected without ejecting the disk.
+
 ## Saving Limitation
 
 A graceful close gives the game an opportunity to run its normal save-on-exit behavior, but the watcher cannot guarantee that every game saves. Games that only save through an in-game menu must still be saved manually before ejecting the disk.

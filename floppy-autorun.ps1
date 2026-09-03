@@ -16,6 +16,8 @@ using Microsoft.Win32.SafeHandles;
 
 public static class FloppyWindowCloser
 {
+    public static int LastMediaError { get; private set; }
+
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
 
     [DllImport("user32.dll")]
@@ -70,6 +72,7 @@ public static class FloppyWindowCloser
         {
             if (device.IsInvalid)
             {
+                LastMediaError = Marshal.GetLastWin32Error();
                 return false;
             }
 
@@ -77,6 +80,7 @@ public static class FloppyWindowCloser
             var buffer = VirtualAlloc(IntPtr.Zero, (UIntPtr)4096, 0x3000, 0x04);
             if (eventHandle == IntPtr.Zero || buffer == IntPtr.Zero)
             {
+                LastMediaError = Marshal.GetLastWin32Error();
                 if (eventHandle != IntPtr.Zero) CloseHandle(eventHandle);
                 if (buffer != IntPtr.Zero) VirtualFree(buffer, UIntPtr.Zero, 0x8000);
                 return false;
@@ -91,21 +95,27 @@ public static class FloppyWindowCloser
                 uint returned;
                 if (ReadFile(device, buffer, 512, out returned, overlappedPointer))
                 {
+                    LastMediaError = 0;
                     return returned == 512;
                 }
 
-                if (Marshal.GetLastWin32Error() != 997)
+                var error = Marshal.GetLastWin32Error();
+                if (error != 997)
                 {
+                    LastMediaError = error;
                     return false;
                 }
 
                 if (WaitForSingleObject(eventHandle, 1500) == 0)
                 {
-                    return GetOverlappedResult(device, overlappedPointer, out returned, false) && returned == 512;
+                    var completed = GetOverlappedResult(device, overlappedPointer, out returned, false);
+                    LastMediaError = completed ? 0 : Marshal.GetLastWin32Error();
+                    return completed && returned == 512;
                 }
 
                 CancelIoEx(device, overlappedPointer);
                 WaitForSingleObject(eventHandle, 1500);
+                LastMediaError = 1460;
                 return false;
             }
             finally
@@ -211,7 +221,7 @@ while ($true) {
     $autorunPath = Join-Path $Drive $FileName
     $isReady = [FloppyWindowCloser]::IsMediaReady($Drive) -and [IO.File]::Exists($autorunPath)
     if ($null -eq $lastMediaReady -or $isReady -ne $lastMediaReady) {
-        Write-Log "Media readiness changed; ready=$isReady."
+        Write-Log "Media readiness changed; ready=$isReady, hardwareError=$([FloppyWindowCloser]::LastMediaError)."
         $lastMediaReady = $isReady
     }
 
@@ -227,6 +237,11 @@ while ($true) {
                 }
                 $config[$key] = $value
             }
+        }
+
+        if (-not $config['path']) {
+            Write-Log 'The autorun file is invalid because it has no path value; it will be checked again.'
+            continue
         }
 
         $activeConfig = $config
