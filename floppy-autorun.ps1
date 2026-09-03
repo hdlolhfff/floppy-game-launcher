@@ -15,9 +15,9 @@ $launchedProcessId = $null
 
 while ($true) {
     $autorunPath = Join-Path $Drive $FileName
-    $isReady = [IO.Directory]::Exists($Drive)
+    $isReady = [IO.File]::Exists($autorunPath)
 
-    if ($isReady -and -not $diskSessionActive -and [IO.File]::Exists($autorunPath)) {
+    if ($isReady -and -not $diskSessionActive) {
         $config = @{}
         foreach ($line in [IO.File]::ReadAllLines($autorunPath)) {
             if ($line -match '^\s*([^#;][^=]*)=(.*)$') {
