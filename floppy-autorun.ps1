@@ -8,10 +8,17 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+$logPath = Join-Path $PSScriptRoot 'floppy-autorun.log'
 $diskSessionActive = $false
 $notReadySince = $null
 $activeConfig = $null
 $launchedProcessId = $null
+
+function Write-Log {
+    param([Parameter(Mandatory)][string]$Message)
+
+    Add-Content -LiteralPath $logPath -Value ('{0}  {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Message) -Encoding UTF8
+}
 
 function Close-ActiveGame {
     param(
@@ -28,16 +35,23 @@ function Close-ActiveGame {
         $gameProcesses = Get-Process -Id $ProcessId
     }
 
+    if (-not $gameProcesses) {
+        Write-Log 'No running game process was found to close.'
+    }
+
     $gameProcesses | ForEach-Object {
         # WM_CLOSE lets the game perform its normal save-and-exit handling.
-        $_.CloseMainWindow() | Out-Null
+        $closeRequested = $_.CloseMainWindow()
+        Write-Log "Close request sent to $($_.ProcessName) (PID $($_.Id)); accepted=$closeRequested."
     }
 }
 
 $driveName = $Drive.TrimEnd('\')
 $eventSource = "FloppyGameLauncher-$PID"
 $eventQuery = "SELECT * FROM Win32_VolumeChangeEvent WHERE DriveName = '$driveName'"
-$eventRegistration = Register-WmiEvent -Query $eventQuery -SourceIdentifier $eventSource
+Register-WmiEvent -Query $eventQuery -SourceIdentifier $eventSource
+$eventRegistration = Get-EventSubscriber -SourceIdentifier $eventSource
+Write-Log "Watcher started for $Drive$FileName; volume events enabled=$([bool]$eventRegistration)."
 
 while ($true) {
     if ($eventRegistration) {
@@ -51,7 +65,9 @@ while ($true) {
     if ($volumeEvent) {
         $eventType = $volumeEvent.SourceEventArgs.NewEvent.EventType
         Remove-Event -EventIdentifier $volumeEvent.EventIdentifier
+        Write-Log "Windows volume event received; type=$eventType, drive=$driveName."
         if ($eventType -in 2, 3 -and $diskSessionActive) {
+            Write-Log 'Resetting the active disk session after a volume arrival or removal event.'
             Close-ActiveGame -Config $activeConfig -ProcessId $launchedProcessId
             $activeConfig = $null
             $launchedProcessId = $null
@@ -64,6 +80,7 @@ while ($true) {
     $isReady = [IO.File]::Exists($autorunPath)
 
     if ($isReady -and -not $diskSessionActive) {
+        Write-Log "Detected $autorunPath."
         $config = @{}
         foreach ($line in [IO.File]::ReadAllLines($autorunPath)) {
             if ($line -match '^\s*([^#;][^=]*)=(.*)$') {
@@ -81,25 +98,39 @@ while ($true) {
 
         $executable = [Environment]::ExpandEnvironmentVariables($config['path'])
         if ($executable -and [IO.File]::Exists($executable)) {
-            if ($config['arguments']) {
-                $launchedProcess = Start-Process -FilePath $executable -ArgumentList $config['arguments'] -PassThru
+            try {
+                if ($config['arguments']) {
+                    $launchedProcess = Start-Process -FilePath $executable -ArgumentList $config['arguments'] -PassThru -ErrorAction Stop
+                }
+                else {
+                    $launchedProcess = Start-Process -FilePath $executable -PassThru -ErrorAction Stop
+                }
+                $launchedProcessId = $launchedProcess.Id
+                Write-Log "Launched $executable (PID $launchedProcessId)."
             }
-            else {
-                $launchedProcess = Start-Process -FilePath $executable -PassThru
+            catch {
+                Write-Log "Launch failed for $executable`: $($_.Exception.Message)"
             }
-            $launchedProcessId = $launchedProcess.Id
+        }
+        else {
+            Write-Log "Configured executable was not found: $executable"
         }
 
         $diskSessionActive = $true
     }
 
     if ($diskSessionActive -and $isReady) {
+        if ($null -ne $notReadySince) {
+            Write-Log 'The media became available again before ejection was confirmed.'
+        }
         $notReadySince = $null
     }
     elseif ($diskSessionActive -and $null -eq $notReadySince) {
         $notReadySince = [DateTime]::UtcNow
+        Write-Log "$autorunPath is unavailable; waiting for the next check to confirm ejection."
     }
     elseif ($diskSessionActive -and ([DateTime]::UtcNow - $notReadySince).TotalSeconds -ge 3) {
+        Write-Log 'Disk ejection confirmed.'
         Close-ActiveGame -Config $activeConfig -ProcessId $launchedProcessId
         $activeConfig = $null
         $launchedProcessId = $null

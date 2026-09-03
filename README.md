@@ -10,6 +10,7 @@ Turn floppy disks into physical game launchers on Windows. Inserting a disk cont
 - Closes the configured game when the disk has been absent for three seconds.
 - Debounces temporary floppy read failures to prevent duplicate launches.
 - Responds to Windows volume arrival and removal events when a USB floppy drive is reconnected.
+- Logs disk, launch, ejection, and close activity for troubleshooting.
 - Starts automatically when the current user signs in.
 
 ## Requirements
@@ -64,6 +65,16 @@ Do not include `.exe` in `process`. You can find the process name in Task Manage
 The watcher listens for Windows volume arrival and removal events and also checks for `A:\autorun.txt` every four seconds as a fallback. Probing the file forces an actual media check even when a USB floppy drive remains connected. It parses the file and launches the configured executable once for that disk session. The file must remain unavailable across consecutive fallback checks before the watcher treats the disk as ejected; this avoids duplicate launches caused by temporary read failures.
 
 On ejection, the watcher sends the game a standard Windows close request (`WM_CLOSE`). It does not force-kill the process.
+
+## Logs
+
+The watcher records timestamped activity in:
+
+```text
+%LOCALAPPDATA%\FloppyGameLauncher\floppy-autorun.log
+```
+
+The log includes watcher startup, volume arrival/removal events, disk detection, launch results, temporary media failures, confirmed ejection, and game close requests.
 
 ## Saving Limitation
 
