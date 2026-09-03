@@ -62,7 +62,7 @@ Do not include `.exe` in `process`. You can find the process name in Task Manage
 
 ## How It Works
 
-The watcher listens for Windows volume arrival and removal events and also checks for `A:\autorun.txt` every four seconds as a fallback. Probing the file forces an actual media check even when a USB floppy drive remains connected. It parses the file and launches the configured executable once for that disk session. The file must remain unavailable across consecutive fallback checks before the watcher treats the disk as ejected; this avoids duplicate launches caused by temporary read failures.
+The watcher listens for Windows volume arrival and removal events and also checks the floppy hardware and `A:\autorun.txt` every four seconds as a fallback. The hardware check bypasses stale filesystem results from USB floppy drivers that continue reporting an ejected disk as present. It parses the file and launches the configured executable once for that disk session. The disk must remain unavailable across consecutive fallback checks before the watcher treats it as ejected; this avoids duplicate launches caused by temporary read failures.
 
 On ejection, the watcher sends the game a standard Windows close request (`WM_CLOSE`). If the process does not expose a main window through .NET, the watcher also sends the request to each top-level window owned by that process. It does not force-kill the process.
 

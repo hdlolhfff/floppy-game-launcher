@@ -12,6 +12,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 public static class FloppyWindowCloser
 {
@@ -25,6 +26,26 @@ public static class FloppyWindowCloser
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(SafeFileHandle device, uint controlCode, IntPtr input, uint inputSize, IntPtr output, uint outputSize, out uint returned, IntPtr overlapped);
+
+    public static bool IsMediaReady(string drive)
+    {
+        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero))
+        {
+            if (device.IsInvalid)
+            {
+                return false;
+            }
+
+            uint returned;
+            return DeviceIoControl(device, 0x00074800, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero);
+        }
+    }
 
     public static int CloseWindowsForProcess(int processId)
     {
@@ -49,6 +70,7 @@ $diskSessionActive = $false
 $notReadySince = $null
 $activeConfig = $null
 $launchedProcessId = $null
+$lastMediaReady = $null
 
 function Write-Log {
     param([Parameter(Mandatory)][string]$Message)
@@ -117,7 +139,11 @@ while ($true) {
     }
 
     $autorunPath = Join-Path $Drive $FileName
-    $isReady = [IO.File]::Exists($autorunPath)
+    $isReady = [FloppyWindowCloser]::IsMediaReady($Drive) -and [IO.File]::Exists($autorunPath)
+    if ($null -eq $lastMediaReady -or $isReady -ne $lastMediaReady) {
+        Write-Log "Media readiness changed; ready=$isReady."
+        $lastMediaReady = $isReady
+    }
 
     if ($isReady -and -not $diskSessionActive) {
         Write-Log "Detected $autorunPath."
