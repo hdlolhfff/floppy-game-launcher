@@ -8,6 +8,42 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class FloppyWindowCloser
+{
+    private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    public static int CloseWindowsForProcess(int processId)
+    {
+        var count = 0;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            uint windowProcessId;
+            GetWindowThreadProcessId(window, out windowProcessId);
+            if (windowProcessId == processId && PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero))
+            {
+                count++;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return count;
+    }
+}
+'@
+
 $logPath = Join-Path $PSScriptRoot 'floppy-autorun.log'
 $diskSessionActive = $false
 $notReadySince = $null
@@ -42,7 +78,11 @@ function Close-ActiveGame {
     $gameProcesses | ForEach-Object {
         # WM_CLOSE lets the game perform its normal save-and-exit handling.
         $closeRequested = $_.CloseMainWindow()
-        Write-Log "Close request sent to $($_.ProcessName) (PID $($_.Id)); accepted=$closeRequested."
+        $fallbackWindowCount = 0
+        if (-not $closeRequested) {
+            $fallbackWindowCount = [FloppyWindowCloser]::CloseWindowsForProcess($_.Id)
+        }
+        Write-Log "Close request sent to $($_.ProcessName) (PID $($_.Id)); accepted=$closeRequested, fallbackWindows=$fallbackWindowCount."
     }
 }
 

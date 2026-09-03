@@ -27,7 +27,7 @@ Download or clone this repository, open PowerShell in its folder, and run:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The installer copies the watcher to `%LOCALAPPDATA%\FloppyGameLauncher`, creates a shortcut in the current user's Startup folder, and starts it immediately. Administrator access is not required.
+The installer requests administrator access, copies the watcher to `%LOCALAPPDATA%\FloppyGameLauncher`, registers a highest-privilege scheduled task for the current user's logon, and starts it immediately. Running at the highest privilege allows the watcher to close games that a launcher starts as administrator.
 
 ## Configure A Disk
 
@@ -64,7 +64,7 @@ Do not include `.exe` in `process`. You can find the process name in Task Manage
 
 The watcher listens for Windows volume arrival and removal events and also checks for `A:\autorun.txt` every four seconds as a fallback. Probing the file forces an actual media check even when a USB floppy drive remains connected. It parses the file and launches the configured executable once for that disk session. The file must remain unavailable across consecutive fallback checks before the watcher treats the disk as ejected; this avoids duplicate launches caused by temporary read failures.
 
-On ejection, the watcher sends the game a standard Windows close request (`WM_CLOSE`). It does not force-kill the process.
+On ejection, the watcher sends the game a standard Windows close request (`WM_CLOSE`). If the process does not expose a main window through .NET, the watcher also sends the request to each top-level window owned by that process. It does not force-kill the process.
 
 ## Logs
 
