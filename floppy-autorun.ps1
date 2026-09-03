@@ -4,7 +4,9 @@ param(
     [string]$Drive = 'A:\',
 
     [ValidateNotNullOrEmpty()]
-    [string]$FileName = 'autorun.txt'
+    [string]$FileName = 'autorun.txt',
+
+    [switch]$ProbeMedia
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -16,8 +18,6 @@ using Microsoft.Win32.SafeHandles;
 
 public static class FloppyWindowCloser
 {
-    public static int LastMediaError { get; private set; }
-
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
 
     [DllImport("user32.dll")]
@@ -36,93 +36,34 @@ public static class FloppyWindowCloser
     private static extern bool ReadFile(SafeFileHandle device, IntPtr buffer, uint bytesToRead, out uint bytesRead, IntPtr overlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr CreateEvent(IntPtr attributes, bool manualReset, bool initialState, string name);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetOverlappedResult(SafeFileHandle device, IntPtr overlapped, out uint transferred, bool wait);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CancelIoEx(SafeFileHandle device, IntPtr overlapped);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool CloseHandle(IntPtr handle);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr VirtualAlloc(IntPtr address, UIntPtr size, uint allocationType, uint protection);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool VirtualFree(IntPtr address, UIntPtr size, uint freeType);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct OverlappedData
-    {
-        public UIntPtr Internal;
-        public UIntPtr InternalHigh;
-        public uint Offset;
-        public uint OffsetHigh;
-        public IntPtr EventHandle;
-    }
-
     public static bool IsMediaReady(string drive)
     {
-        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0x80000000, 3, IntPtr.Zero, 3, 0x60000000, IntPtr.Zero))
+        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0x80000000, 3, IntPtr.Zero, 3, 0x20000000, IntPtr.Zero))
         {
             if (device.IsInvalid)
             {
-                LastMediaError = Marshal.GetLastWin32Error();
                 return false;
             }
 
-            var eventHandle = CreateEvent(IntPtr.Zero, true, false, null);
             var buffer = VirtualAlloc(IntPtr.Zero, (UIntPtr)4096, 0x3000, 0x04);
-            if (eventHandle == IntPtr.Zero || buffer == IntPtr.Zero)
+            if (buffer == IntPtr.Zero)
             {
-                LastMediaError = Marshal.GetLastWin32Error();
-                if (eventHandle != IntPtr.Zero) CloseHandle(eventHandle);
-                if (buffer != IntPtr.Zero) VirtualFree(buffer, UIntPtr.Zero, 0x8000);
                 return false;
             }
-
-            var overlapped = new OverlappedData { EventHandle = eventHandle };
-            var overlappedPointer = Marshal.AllocHGlobal(Marshal.SizeOf(overlapped));
-            Marshal.StructureToPtr(overlapped, overlappedPointer, false);
 
             try
             {
                 uint returned;
-                if (ReadFile(device, buffer, 512, out returned, overlappedPointer))
-                {
-                    LastMediaError = 0;
-                    return returned == 512;
-                }
-
-                var error = Marshal.GetLastWin32Error();
-                if (error != 997)
-                {
-                    LastMediaError = error;
-                    return false;
-                }
-
-                if (WaitForSingleObject(eventHandle, 1500) == 0)
-                {
-                    var completed = GetOverlappedResult(device, overlappedPointer, out returned, false);
-                    LastMediaError = completed ? 0 : Marshal.GetLastWin32Error();
-                    return completed && returned == 512;
-                }
-
-                CancelIoEx(device, overlappedPointer);
-                WaitForSingleObject(eventHandle, 1500);
-                LastMediaError = 1460;
-                return false;
+                return ReadFile(device, buffer, 512, out returned, IntPtr.Zero) && returned == 512;
             }
             finally
             {
-                Marshal.FreeHGlobal(overlappedPointer);
                 VirtualFree(buffer, UIntPtr.Zero, 0x8000);
-                CloseHandle(eventHandle);
             }
         }
     }
@@ -145,6 +86,13 @@ public static class FloppyWindowCloser
 }
 '@
 
+if ($ProbeMedia) {
+    if ([FloppyWindowCloser]::IsMediaReady($Drive)) {
+        exit 0
+    }
+    exit 1
+}
+
 $logPath = Join-Path $PSScriptRoot 'floppy-autorun.log'
 $diskSessionActive = $false
 $notReadySince = $null
@@ -156,6 +104,23 @@ function Write-Log {
     param([Parameter(Mandatory)][string]$Message)
 
     Add-Content -LiteralPath $logPath -Value ('{0}  {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Message) -Encoding UTF8
+}
+
+function Test-MediaReady {
+    $probe = Start-Process `
+        -FilePath (Join-Path $PSHOME 'powershell.exe') `
+        -ArgumentList '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Drive', $Drive, '-FileName', $FileName, '-ProbeMedia' `
+        -WindowStyle Hidden `
+        -PassThru
+
+    if (-not $probe.WaitForExit(2500)) {
+        Stop-Process -Id $probe.Id -Force
+        $script:lastMediaStatus = 'timeout'
+        return $false
+    }
+
+    $script:lastMediaStatus = "exit-$($probe.ExitCode)"
+    return $probe.ExitCode -eq 0
 }
 
 function Close-ActiveGame {
@@ -219,9 +184,9 @@ while ($true) {
     }
 
     $autorunPath = Join-Path $Drive $FileName
-    $isReady = [FloppyWindowCloser]::IsMediaReady($Drive) -and [IO.File]::Exists($autorunPath)
+    $isReady = (Test-MediaReady) -and [IO.File]::Exists($autorunPath)
     if ($null -eq $lastMediaReady -or $isReady -ne $lastMediaReady) {
-        Write-Log "Media readiness changed; ready=$isReady, hardwareError=$([FloppyWindowCloser]::LastMediaError)."
+        Write-Log "Media readiness changed; ready=$isReady, probeStatus=$lastMediaStatus."
         $lastMediaReady = $isReady
     }
 
