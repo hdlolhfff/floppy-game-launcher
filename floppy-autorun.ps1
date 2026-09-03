@@ -13,7 +13,53 @@ $notReadySince = $null
 $activeConfig = $null
 $launchedProcessId = $null
 
+function Close-ActiveGame {
+    param(
+        [hashtable]$Config,
+        $ProcessId
+    )
+
+    $gameProcesses = @()
+    if ($Config['process']) {
+        $processName = [IO.Path]::GetFileNameWithoutExtension($Config['process'])
+        $gameProcesses = Get-Process -Name $processName
+    }
+    elseif ($ProcessId) {
+        $gameProcesses = Get-Process -Id $ProcessId
+    }
+
+    $gameProcesses | ForEach-Object {
+        # WM_CLOSE lets the game perform its normal save-and-exit handling.
+        $_.CloseMainWindow() | Out-Null
+    }
+}
+
+$driveName = $Drive.TrimEnd('\')
+$eventSource = "FloppyGameLauncher-$PID"
+$eventQuery = "SELECT * FROM Win32_VolumeChangeEvent WHERE DriveName = '$driveName'"
+$eventRegistration = Register-WmiEvent -Query $eventQuery -SourceIdentifier $eventSource
+
 while ($true) {
+    if ($eventRegistration) {
+        $volumeEvent = Wait-Event -SourceIdentifier $eventSource -Timeout 4
+    }
+    else {
+        Start-Sleep -Seconds 4
+        $volumeEvent = $null
+    }
+
+    if ($volumeEvent) {
+        $eventType = $volumeEvent.SourceEventArgs.NewEvent.EventType
+        Remove-Event -EventIdentifier $volumeEvent.EventIdentifier
+        if ($eventType -in 2, 3 -and $diskSessionActive) {
+            Close-ActiveGame -Config $activeConfig -ProcessId $launchedProcessId
+            $activeConfig = $null
+            $launchedProcessId = $null
+            $diskSessionActive = $false
+            $notReadySince = $null
+        }
+    }
+
     $autorunPath = Join-Path $Drive $FileName
     $isReady = [IO.File]::Exists($autorunPath)
 
@@ -54,24 +100,10 @@ while ($true) {
         $notReadySince = [DateTime]::UtcNow
     }
     elseif ($diskSessionActive -and ([DateTime]::UtcNow - $notReadySince).TotalSeconds -ge 3) {
-        $gameProcesses = @()
-        if ($activeConfig['process']) {
-            $processName = [IO.Path]::GetFileNameWithoutExtension($activeConfig['process'])
-            $gameProcesses = Get-Process -Name $processName
-        }
-        elseif ($launchedProcessId) {
-            $gameProcesses = Get-Process -Id $launchedProcessId
-        }
-
-        $gameProcesses | ForEach-Object {
-            # WM_CLOSE lets the game perform its normal save-and-exit handling.
-            $_.CloseMainWindow() | Out-Null
-        }
+        Close-ActiveGame -Config $activeConfig -ProcessId $launchedProcessId
         $activeConfig = $null
         $launchedProcessId = $null
         $diskSessionActive = $false
         $notReadySince = $null
     }
-
-    Start-Sleep -Seconds 4
 }
