@@ -31,19 +31,89 @@ public static class FloppyWindowCloser
     private static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool DeviceIoControl(SafeFileHandle device, uint controlCode, IntPtr input, uint inputSize, IntPtr output, uint outputSize, out uint returned, IntPtr overlapped);
+    private static extern bool ReadFile(SafeFileHandle device, IntPtr buffer, uint bytesToRead, out uint bytesRead, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateEvent(IntPtr attributes, bool manualReset, bool initialState, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetOverlappedResult(SafeFileHandle device, IntPtr overlapped, out uint transferred, bool wait);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CancelIoEx(SafeFileHandle device, IntPtr overlapped);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr VirtualAlloc(IntPtr address, UIntPtr size, uint allocationType, uint protection);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool VirtualFree(IntPtr address, UIntPtr size, uint freeType);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OverlappedData
+    {
+        public UIntPtr Internal;
+        public UIntPtr InternalHigh;
+        public uint Offset;
+        public uint OffsetHigh;
+        public IntPtr EventHandle;
+    }
 
     public static bool IsMediaReady(string drive)
     {
-        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero))
+        using (var device = CreateFile(@"\\.\" + drive.TrimEnd('\\'), 0x80000000, 3, IntPtr.Zero, 3, 0x60000000, IntPtr.Zero))
         {
             if (device.IsInvalid)
             {
                 return false;
             }
 
-            uint returned;
-            return DeviceIoControl(device, 0x00074800, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero);
+            var eventHandle = CreateEvent(IntPtr.Zero, true, false, null);
+            var buffer = VirtualAlloc(IntPtr.Zero, (UIntPtr)4096, 0x3000, 0x04);
+            if (eventHandle == IntPtr.Zero || buffer == IntPtr.Zero)
+            {
+                if (eventHandle != IntPtr.Zero) CloseHandle(eventHandle);
+                if (buffer != IntPtr.Zero) VirtualFree(buffer, UIntPtr.Zero, 0x8000);
+                return false;
+            }
+
+            var overlapped = new OverlappedData { EventHandle = eventHandle };
+            var overlappedPointer = Marshal.AllocHGlobal(Marshal.SizeOf(overlapped));
+            Marshal.StructureToPtr(overlapped, overlappedPointer, false);
+
+            try
+            {
+                uint returned;
+                if (ReadFile(device, buffer, 512, out returned, overlappedPointer))
+                {
+                    return returned == 512;
+                }
+
+                if (Marshal.GetLastWin32Error() != 997)
+                {
+                    return false;
+                }
+
+                if (WaitForSingleObject(eventHandle, 1500) == 0)
+                {
+                    return GetOverlappedResult(device, overlappedPointer, out returned, false) && returned == 512;
+                }
+
+                CancelIoEx(device, overlappedPointer);
+                WaitForSingleObject(eventHandle, 1500);
+                return false;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(overlappedPointer);
+                VirtualFree(buffer, UIntPtr.Zero, 0x8000);
+                CloseHandle(eventHandle);
+            }
         }
     }
 
